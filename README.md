@@ -14,7 +14,7 @@ https://github.com/settings/applications/new
 | --- | --- |
 | Application name | `TronIDE` |
 | Homepage URL | `https://tronide.io` |
-| Authorization callback URL | `https://gh-oauth.tronide.io/callback` |
+| Authorization callback URL | `https://tronide-gh-oauth.redchar1992.deno.net/callback` |
 | Enable Device Flow | off |
 
 Copy the **Client ID** (goes in the frontend, public). Click **Generate a new
@@ -37,7 +37,7 @@ deployctl deploy --project=tronide-gh-oauth main.ts
 | --- | --- |
 | `GITHUB_CLIENT_ID` | the OAuth App client id |
 | `GITHUB_CLIENT_SECRET` | the OAuth App client secret |
-| `REDIRECT_URI` | `https://gh-oauth.tronide.io/callback` |
+| `REDIRECT_URI` | `https://tronide-gh-oauth.redchar1992.deno.net/callback` |
 | `ALLOWED_ORIGINS` | `https://tronide.io` (add `,https://<user>.github.io` if used) |
 
 ## 4. Wire the frontend

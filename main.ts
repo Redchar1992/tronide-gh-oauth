@@ -9,19 +9,19 @@
  *
  * Deploy:  deployctl deploy --project=tronide-gh-oauth main.ts
  * Callback (register in the GitHub OAuth App):
- *          https://gh-oauth.tronide.io/callback
+ *          https://tronide-gh-oauth.redchar1992.deno.net/callback
  *
  * Env vars (Deno Deploy → Settings → Environment Variables):
  *   GITHUB_CLIENT_ID       the OAuth App client id
  *   GITHUB_CLIENT_SECRET   the OAuth App client secret   (never shipped to the browser)
- *   REDIRECT_URI           https://gh-oauth.tronide.io/callback
+ *   REDIRECT_URI           https://tronide-gh-oauth.redchar1992.deno.net/callback
  *   ALLOWED_ORIGINS        comma-separated site origins allowed to receive the token,
  *                          e.g. "https://tronide.io,https://<user>.github.io"
  */
 
 const CLIENT_ID = Deno.env.get('GITHUB_CLIENT_ID') ?? ''
 const CLIENT_SECRET = Deno.env.get('GITHUB_CLIENT_SECRET') ?? ''
-const REDIRECT_URI = Deno.env.get('REDIRECT_URI') ?? 'https://gh-oauth.tronide.io/callback'
+const REDIRECT_URI = Deno.env.get('REDIRECT_URI') ?? 'https://tronide-gh-oauth.redchar1992.deno.net/callback'
 const ALLOWED_ORIGINS = (Deno.env.get('ALLOWED_ORIGINS') ?? 'https://tronide.io')
   .split(',').map((s) => s.trim()).filter(Boolean)
 
