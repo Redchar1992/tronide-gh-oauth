@@ -75,8 +75,118 @@ function resultPage (payload: Record<string, unknown>): Response {
   })
 }
 
+// CORS allow-origin for a given request: echo the Origin if it is allow-listed,
+// otherwise fall back to the first allowed origin (never '*', since git requests
+// carry an Authorization header and credentials).
+function corsOrigin (req: Request): string {
+  const origin = req.headers.get('origin') ?? ''
+  return ALLOWED_ORIGINS.includes(origin) ? origin : (ALLOWED_ORIGINS[0] ?? '')
+}
+
+// Headers git's smart-HTTP client may send and needs us to forward/allow. Kept
+// lower-case for case-insensitive comparison against the incoming request.
+const GIT_ALLOW_HEADERS = [
+  'accept', 'authorization', 'content-type', 'content-length',
+  'git-protocol', 'user-agent', 'pragma', 'cache-control', 'x-requested-with'
+]
+// Response headers git needs to read back from the proxied response.
+const GIT_EXPOSE_HEADERS = [
+  'content-type', 'content-length', 'content-encoding', 'transfer-encoding',
+  'cache-control', 'expires', 'pragma', 'www-authenticate'
+]
+
+function gitCorsHeaders (req: Request): Record<string, string> {
+  return {
+    'access-control-allow-origin': corsOrigin(req),
+    'access-control-allow-methods': 'GET, POST, OPTIONS',
+    'access-control-allow-headers': GIT_ALLOW_HEADERS.join(', '),
+    'access-control-expose-headers': GIT_EXPOSE_HEADERS.join(', '),
+    'access-control-allow-credentials': 'true',
+    'access-control-max-age': '600',
+    vary: 'Origin'
+  }
+}
+
+// Stateless CORS proxy for isomorphic-git smart-HTTP. The IDE is a static site
+// on GitHub Pages; the browser cannot talk to github.com's git endpoints
+// directly (no CORS). isomorphic-git is configured with corsProxy='<this>/git'
+// and rewrites a request to e.g. `<this>/git/<owner>/<repo>.git/info/refs?...`.
+// We strip the `/git/` prefix, forward the rest verbatim to
+// `https://github.com/<rest>`, stream both bodies through, and re-attach CORS
+// headers. We forward only git-relevant request headers (incl. Authorization,
+// which carries the token-as-basic-auth) and NEVER log them.
+//
+// NOTE: this function runs on Deno Deploy — the proxy must be REDEPLOYED
+// (deployctl deploy --project=tronide-gh-oauth main.ts) before the IDE's remote
+// git features (clone/fetch/pull/push) work. The live deployment lacks `/git/`
+// until that redeploy.
+async function handleGitProxy (req: Request, url: URL): Promise<Response> {
+  if (req.method === 'OPTIONS') {
+    return new Response(null, { status: 204, headers: gitCorsHeaders(req) })
+  }
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    return new Response('Method not allowed', { status: 405, headers: gitCorsHeaders(req) })
+  }
+
+  // Everything after '/git/' plus the original query string is the github.com path.
+  // SSRF guard: only the exact git smart-HTTP shape `<owner>/<repo>[.git]/<endpoint>`
+  // is allowed, never `..`/`@`/`//`/backslash, and after constructing the URL we
+  // assert it still points at github.com. Combined with redirect:'manual' below,
+  // the proxy cannot be steered to another host (which would leak the forwarded
+  // Authorization token).
+  const rest = url.pathname.slice('/git/'.length)
+  const GIT_PATH_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/(?:info\/refs|git-upload-pack|git-receive-pack)$/
+  const GIT_QUERY_RE = /^(?:\?service=git-(?:upload|receive)-pack)?$/
+  if (!rest || rest.includes('..') || rest.includes('@') || rest.includes('//') || rest.includes('\\') ||
+      !GIT_PATH_RE.test(rest) || !GIT_QUERY_RE.test(url.search)) {
+    return new Response('Bad git proxy request', { status: 400, headers: gitCorsHeaders(req) })
+  }
+  let target: URL
+  try {
+    target = new URL('https://github.com/' + rest + url.search)
+  } catch (_e) {
+    return new Response('Bad git proxy request', { status: 400, headers: gitCorsHeaders(req) })
+  }
+  if (target.protocol !== 'https:' || target.hostname !== 'github.com') {
+    return new Response('Bad git proxy request', { status: 400, headers: gitCorsHeaders(req) })
+  }
+
+  // Forward only the git-relevant request headers.
+  const fwdHeaders = new Headers()
+  for (const name of GIT_ALLOW_HEADERS) {
+    const v = req.headers.get(name)
+    if (v !== null) fwdHeaders.set(name, v)
+  }
+
+  let upstream: Response
+  try {
+    upstream = await fetch(target.toString(), {
+      method: req.method,
+      headers: fwdHeaders,
+      body: req.method === 'POST' ? req.body : undefined,
+      // Do NOT follow redirects: a redirect off github.com would otherwise make
+      // the proxy re-send the Authorization token to an attacker-controlled host.
+      redirect: 'manual'
+    })
+  } catch (_e) {
+    return new Response('Upstream git request failed', { status: 502, headers: gitCorsHeaders(req) })
+  }
+
+  // Re-attach CORS headers, preserving git-relevant upstream response headers.
+  const respHeaders = new Headers(gitCorsHeaders(req))
+  for (const name of [...GIT_EXPOSE_HEADERS]) {
+    const v = upstream.headers.get(name)
+    if (v !== null) respHeaders.set(name, v)
+  }
+  return new Response(upstream.body, { status: upstream.status, headers: respHeaders })
+}
+
 Deno.serve(async (req: Request) => {
   const url = new URL(req.url)
+
+  if (url.pathname === '/git' || url.pathname.startsWith('/git/')) {
+    return await handleGitProxy(req, url)
+  }
 
   if (url.pathname === '/' || url.pathname === '/health') {
     return new Response('tronide-gh-oauth: ok', { headers: { 'cache-control': 'no-store' } })
