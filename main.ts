@@ -128,14 +128,14 @@ async function handleGitProxy (req: Request, url: URL): Promise<Response> {
     return new Response('Method not allowed', { status: 405, headers: gitCorsHeaders(req) })
   }
 
-  // Everything after '/git/' plus the original query string is the github.com path.
-  // SSRF guard: only the exact git smart-HTTP shape `<owner>/<repo>[.git]/<endpoint>`
-  // is allowed, never `..`/`@`/`//`/backslash, and after constructing the URL we
-  // assert it still points at github.com. Combined with redirect:'manual' below,
-  // the proxy cannot be steered to another host (which would leak the forwarded
-  // Authorization token).
-  const rest = url.pathname.slice('/git/'.length)
-  const GIT_PATH_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/(?:info\/refs|git-upload-pack|git-receive-pack)$/
+  // isomorphic-git's corsProxy sends `/git/<host>/<owner>/<repo>[.git]/<endpoint>`
+  // (the target host is part of the path, protocol stripped). SSRF guard: pin the
+  // host to github.com, allow only the exact git smart-HTTP shape, never
+  // `..`/`@`/`//`/backslash, and assert the constructed URL still points at
+  // github.com. Combined with redirect:'manual' below, the proxy cannot be
+  // steered to another host (which would leak the forwarded Authorization token).
+  const rest = url.pathname.slice('/git/'.length).replace(/^https?:\/\//i, '')
+  const GIT_PATH_RE = /^github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+(?:\.git)?\/(?:info\/refs|git-upload-pack|git-receive-pack)$/
   const GIT_QUERY_RE = /^(?:\?service=git-(?:upload|receive)-pack)?$/
   if (!rest || rest.includes('..') || rest.includes('@') || rest.includes('//') || rest.includes('\\') ||
       !GIT_PATH_RE.test(rest) || !GIT_QUERY_RE.test(url.search)) {
@@ -143,7 +143,7 @@ async function handleGitProxy (req: Request, url: URL): Promise<Response> {
   }
   let target: URL
   try {
-    target = new URL('https://github.com/' + rest + url.search)
+    target = new URL('https://' + rest + url.search)
   } catch (_e) {
     return new Response('Bad git proxy request', { status: 400, headers: gitCorsHeaders(req) })
   }
